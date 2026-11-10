@@ -2,6 +2,8 @@ name: Android APK
 on:
   push:
   workflow_dispatch:
+permissions:
+  contents: write
 jobs:
   apk:
     runs-on: ubuntu-latest
@@ -21,3 +23,11 @@ jobs:
         with:
           name: wuerfel-roller-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
+      - name: APK als Release veröffentlichen
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp android/app/build/outputs/apk/debug/app-debug.apk wuerfel-roller.apk
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest wuerfel-roller.apk --target "$GITHUB_SHA" \
+            --title "Würfel-Roller (neuester Build)" --notes "Debug-APK, gebaut aus Commit $GITHUB_SHA"
