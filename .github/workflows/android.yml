@@ -15,15 +15,7 @@ jobs:
       - run: npm run build
       - run: npx cap add android
       - run: npx cap sync android
-      - name: Launcher-Icon ersetzen
-        run: |
-          for d in mdpi:48 hdpi:72 xhdpi:96 xxhdpi:144 xxxhdpi:192; do
-            n=${d%%:*}; s=${d##*:}
-            for f in ic_launcher ic_launcher_round ic_launcher_foreground; do
-              convert icon-512.png -resize ${s}x${s} android/app/src/main/res/mipmap-$n/$f.png || true
-            done
-          done
-          rm -f android/app/src/main/res/mipmap-anydpi-v26/*.xml
+      - run: node scripts/apply-icons.js
       - run: cd android && ./gradlew assembleDebug
       - uses: actions/upload-artifact@v4
         with:
