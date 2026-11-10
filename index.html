@@ -4,6 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Würfel-Roller</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#14121f">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
 <style>
   :root {
     --bg: #14121f; --panel: #1f1c30; --panel2: #2a2640; --text: #ece9fa; --muted: #9a94b8;
@@ -83,6 +87,18 @@
   #history li { display: flex; justify-content: space-between; gap: 10px; padding: 8px 4px; border-bottom: 1px solid #ffffff12; font-size: .92rem; }
   #history li b { color: var(--accent); font-size: 1.05rem; }
   #history .f { color: var(--muted); font-family: ui-monospace, monospace; }
+  .die.dropped { opacity: .35; width: 52px; height: 52px; }
+  .seg { display: inline-flex; background: var(--panel2); border-radius: 10px; overflow: hidden; }
+  .seg button { border: 0; background: none; color: var(--muted); padding: 8px 12px; font-weight: 700; cursor: pointer; font-size: .9rem; }
+  .seg button.on { background: var(--accent2); color: #fff; }
+  .opts { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-top: 14px; color: var(--muted); font-size: .9rem; }
+  .toggle { border: 0; background: var(--panel2); color: var(--text); border-radius: 10px; padding: 8px 12px; cursor: pointer; font-size: .9rem; }
+  .toggle.off { opacity: .5; }
+  #sets { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+  #sets .set { display: inline-flex; background: var(--panel2); border-radius: 10px; overflow: hidden; }
+  #sets .set button { border: 0; background: none; color: var(--text); padding: 8px 10px; cursor: pointer; font-size: .9rem; }
+  #sets .set .x { color: var(--bad); padding-left: 4px; }
+  .empty { color: var(--muted); font-size: .9rem; }
   @media (prefers-reduced-motion: reduce) { .die.rolling, .die.rolling svg { animation-duration: .01s; } }
 </style>
 </head>
@@ -93,6 +109,12 @@
   <section class="panel">
     <h2>Würfel wählen &amp; kombinieren</h2>
     <div class="picker" id="picker"></div>
+    <div class="opts">
+      <div>d20: <div class="seg" id="mode">
+        <button data-m="normal" class="on">Normal</button><button data-m="adv">Vorteil</button><button data-m="dis">Nachteil</button>
+      </div></div>
+      <div><button class="toggle" id="snd">🔊 Ton</button> <button class="toggle" id="vib">📳 Vibration</button></div>
+    </div>
     <div class="row">
       <div class="mod">
         Modifikator
@@ -119,6 +141,12 @@
   </section>
 
   <section class="panel">
+    <h2>Gespeicherte Sets</h2>
+    <div id="sets"></div>
+    <button class="sub" id="saveSet" style="padding:8px 14px;font-size:.9rem">💾 Aktuelles Set speichern</button>
+  </section>
+
+  <section class="panel">
     <h2>Verlauf</h2>
     <ul id="history"></ul>
   </section>
@@ -142,7 +170,7 @@
 
   const $ = id => document.getElementById(id);
   const counts = Object.fromEntries(SIDES.map(s => [s, 0]));
-  let modifier = 0, busy = false;
+  let modifier = 0, busy = false, mode = 'normal', soundOn = true, vibOn = true;
   const history = [];
 
   // Fairer Zufall über crypto (ohne Modulo-Verzerrung)
@@ -211,20 +239,77 @@
     $("roll").disabled = busy || !SIDES.some(s => counts[s]);
   }
 
+  // ---- Ton & Vibration ----
+  let ac;
+  function click(delay = 0, f = 300 + Math.random() * 500) {
+    if (!soundOn) return;
+    try {
+      ac = ac || new (window.AudioContext || window.webkitAudioContext)();
+      const t = ac.currentTime + delay, o = ac.createOscillator(), g = ac.createGain();
+      o.type = "square"; o.frequency.value = f;
+      g.gain.setValueAtTime(.08, t); g.gain.exponentialRampToValueAtTime(.001, t + .05);
+      o.connect(g); g.connect(ac.destination); o.start(t); o.stop(t + .06);
+    } catch (e) {}
+  }
+  function vibrate(p) { if (vibOn && navigator.vibrate) navigator.vibrate(p); }
+  $("snd").onclick = () => { soundOn = !soundOn; $("snd").classList.toggle("off", !soundOn); save(); };
+  $("vib").onclick = () => { vibOn = !vibOn; $("vib").classList.toggle("off", !vibOn); save(); };
+  $("mode").onclick = e => {
+    const b = e.target.closest("button"); if (!b) return;
+    mode = b.dataset.m;
+    document.querySelectorAll("#mode button").forEach(x => x.classList.toggle("on", x === b));
+  };
+
+  // ---- Gespeicherte Sets ----
+  let sets = [];
+  function save() { try { localStorage.setItem("dice", JSON.stringify({ sets, soundOn, vibOn })); } catch (e) {} }
+  function loadSaved() {
+    try {
+      const d = JSON.parse(localStorage.getItem("dice") || "{}");
+      sets = d.sets || []; soundOn = d.soundOn !== false; vibOn = d.vibOn !== false;
+    } catch (e) {}
+    $("snd").classList.toggle("off", !soundOn); $("vib").classList.toggle("off", !vibOn);
+  }
+  function renderSets() {
+    $("sets").innerHTML = sets.length ? sets.map((st, i) =>
+      `<span class="set"><button data-i="${i}" class="use">${st.name}</button><button data-i="${i}" class="x" aria-label="Löschen">✕</button></span>`).join("")
+      : '<span class="empty">Noch keine Sets gespeichert.</span>';
+  }
+  $("saveSet").onclick = () => {
+    const f = formulaText(); if (!f) return;
+    const name = (prompt("Name des Sets:", f) || "").trim(); if (!name) return;
+    sets.push({ name, counts: { ...counts }, modifier }); save(); renderSets();
+  };
+  $("sets").onclick = e => {
+    const b = e.target.closest("button"); if (!b) return;
+    const st = sets[+b.dataset.i];
+    if (b.classList.contains("x")) { sets.splice(+b.dataset.i, 1); save(); renderSets(); }
+    else { SIDES.forEach(s => counts[s] = st.counts[s] || 0); modifier = st.modifier; refresh(); }
+  };
+
   // ---- Würfeln ----
   function roll() {
     if (busy) return;
     const dice = [];
-    SIDES.forEach(s => { for (let i = 0; i < counts[s]; i++) dice.push({ sides: s, value: randInt(s) }); });
+    SIDES.forEach(s => { for (let i = 0; i < counts[s]; i++) {
+      if (s === 20 && mode !== 'normal') {
+        const a = randInt(20), b = randInt(20);
+        const keep = mode === 'adv' ? Math.max(a, b) : Math.min(a, b);
+        dice.push({ sides: s, value: keep });
+        dice.push({ sides: s, value: a + b - keep, dropped: true });
+      } else dice.push({ sides: s, value: randInt(s) });
+    } });
     if (!dice.length) return;
     busy = true; refresh();
     $("total").hidden = true;
+    for (let k = 0; k < 10; k++) click(k * 0.11);
+    vibrate([20, 40, 20, 40, 20]);
 
     const stage = $("stage");
     stage.innerHTML = "";
     const els = dice.map((d, i) => {
       const el = document.createElement("div");
-      el.className = "die rolling" + (d.sides === 100 ? " d100" : "");
+      el.className = "die rolling" + (d.sides === 100 ? " d100" : "") + (d.dropped ? " dropped" : "");
       const dur = 0.9 + Math.random() * 0.5 + Math.min(i, 12) * 0.03;
       el.style.setProperty("--dur", dur + "s");
       el.style.setProperty("--sx", rand(-160, 160) + "px");
@@ -248,26 +333,28 @@
         o.el.classList.remove("rolling");
         o.el.classList.add("landed");
         o.el.querySelector(".num").textContent = o.d.value;
-        if (o.d.sides > 2 && o.d.value === o.d.sides) o.el.classList.add("max");
-        else if (o.d.value === 1) o.el.classList.add("min");
+        if (o.d.dropped) {} else if (o.d.value === o.d.sides) o.el.classList.add("max");
+        else if (o.d.value === 1 && !o.d.dropped) o.el.classList.add("min");
         if (--pending === 0) { clearInterval(flicker); finish(dice); }
       }, o.dur * 1000);
     });
   }
 
   function finish(dice) {
-    const sum = dice.reduce((a, d) => a + d.value, 0) + modifier;
+    const kept = dice.filter(d => !d.dropped);
+    const sum = kept.reduce((a, d) => a + d.value, 0) + modifier;
     const detail = SIDES.filter(s => counts[s]).map(s =>
-      `d${s}: ${dice.filter(d => d.sides === s).map(d => d.value).join(", ")}`).join("  |  ")
+      `d${s}${s === 20 && mode !== 'normal' ? (mode === 'adv' ? ' (Vorteil)' : ' (Nachteil)') : ''}: ${kept.filter(d => d.sides === s).map(d => d.value).join(", ")}`).join("  |  ")
       + (modifier ? `  |  Mod: ${modifier > 0 ? "+" : "−"}${Math.abs(modifier)}` : "");
     $("sum").textContent = sum;
     $("detail").textContent = detail;
     $("total").hidden = false;
-    history.unshift({ f: formulaText(), sum, detail });
+    history.unshift({ f: formulaText() + (counts[20] && mode !== 'normal' ? (mode === 'adv' ? ' (d20 Vorteil)' : ' (d20 Nachteil)') : ''), sum, detail });
     if (history.length > 30) history.pop();
     $("history").innerHTML = history.map(h =>
       `<li><span class="f">${h.f}<br><small>${h.detail}</small></span><b>${h.sum}</b></li>`).join("");
     busy = false; refresh();
+    vibrate([30]);
   }
 
   $("roll").onclick = roll;
@@ -275,6 +362,8 @@
     if ((e.code === "Space" || e.code === "Enter") && !(e.target instanceof HTMLButtonElement)) { e.preventDefault(); if (!$("roll").disabled) roll(); }
   });
 
+  loadSaved(); renderSets();
+  if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
   buildPicker();
   counts[20] = 1; // sinnvolle Vorauswahl
   refresh();
